@@ -1,0 +1,249 @@
+---
+title: "Lab_7_handin"
+format: html
+editor: visual
+Author: Christina Christiansen s223094, Chunxu Han s220311, Matilde Uth s195796, Michelle Sollok s194681, Pelagia Derizioti s222822
+---
+
+## Lab_7\_Handin
+
+Recreateable data, uploaded and worked through GitHub
+
+### Libraries
+
+```{r}
+library("tidyverse")
+library("dplyr")
+library("readr")
+library("purrr")
+library("broom")
+library("ggrepel")
+```
+
+### Load the data - Gravier
+
+```{r}
+# Load data - gravier
+raw_dir <- "data/_raw/"
+data_file <- "gravier.RData"
+data_loc <- "https://github.com/ramhiser/datamicroarray/raw/master/data/"
+
+if( !dir.exists(raw_dir) ){
+  dir.create(path = raw_dir)
+}
+if( !file.exists(str_c(raw_dir, data_file)) ){
+  download.file(
+    url = str_c(data_loc, data_file),
+    destfile = str_c(raw_dir, data_file))
+}
+load(file = str_c(raw_dir, data_file))
+```
+
+### Clean Data
+
+```{r}
+gravier_clean <- gravier |>
+  bind_cols() |>
+  as_tibble()
+
+gravier_clean_aug <- gravier_clean |>
+  mutate(y = case_when(y == "poor" ~ 1,
+                       y == "good" ~ 0)) |> 
+  relocate(early_metastasis = y)
+```
+
+## Plot 1
+
+### plotting a PCA based on the gravier_clean_aug data
+
+```{r}
+# Perform PCA on the data
+pca <- gravier_clean_aug %>%
+  select(-early_metastasis) %>% # Remove non-numeric columns if needed
+  scale() %>%
+  prcomp()
+
+# Create a data frame from the PCA result
+data_pca <- as.data.frame(pca$x)
+
+# Combine with the original data, including the gene names
+data_pca <- data.frame(
+  gene = gravier_clean_aug$early_metastasis, # Replace 'gene' with the actual column name
+  data_pca
+)
+
+# Create the PCA plot
+# Define custom color labels
+color_labels <- c("0" = "Poor", "1" = "Good")
+
+
+ggplot(data_pca, aes(PC1, PC2, color = factor(gene) )) +
+  geom_point(size = 3) +
+  labs(title = "PCA of gene expressions", 
+       x = "PC1", 
+       y = "PC2", 
+       color = "Early metastasis") +
+  theme_minimal() + 
+  scale_color_manual(
+    values = c("0" = "pink", "1" = "lightblue"),  # Adjust the colors as needed
+    labels = color_labels  # Set custom color labels
+  )
+
+
+```
+
+According to the PCA of gravier_clean_aug data, we see that those genes of early metastasis, Notably, the genes categorized as "poor" in the context of early metastasis tend to cluster closely together in the PCA plot, while those labeled as "good" display a more dispersed distribution.
+
+The close clustering of "poor" genes suggests that they share similar patterns of expression. This could indicate common regulatory mechanisms or functional relationships among these genes. In contrast, the wide distribution of "good" genes across the plot implies significant heterogeneity in their expression patterns. It is possible that "good" genes serve diverse functions or respond to a broader range of biological factors.
+
+# Analysis
+
+### **creating my_first_model**
+
+```{r}
+
+# Define the formula for your model
+formula <- gravier_clean_aug$g2E09 ~ early_metastasis
+
+# Fit the linear regression model
+my_first_model <- lm(formula, data = gravier_clean_aug)
+
+
+# Group the data by 'early_metastasis' and calculate the mean of 'my_favourite_gene'
+result <- gravier_clean_aug |>
+  group_by(early_metastasis) |>
+  summarise(mean_gene_expression = mean(g2E09, na.rm = TRUE))
+
+# View the result
+# print(result)
+```
+
+#### how are coefficients related to mean expression values?
+
+*Recall, we have two terms here, `intercept` and `slope`. The intercept is the `y`-value at `x = 0` and the `slope` is the change in `y`-value, for one unit change in `x`*
+
+In summary, the intercept provides the baseline or starting point for the mean expression value, and the slope tells you how the mean expression changes as the independent variable changes. These coefficients help us understand and quantify the relationship between variables in a linear regression model.
+
+### Transform from wide to long data
+
+the data is wide, so going out horizontally, but we want it in the long direction, so vertically for the possiblity of later models
+
+```{r}
+
+gravier_clean_aug_long <- gravier_clean_aug |>
+  pivot_longer(
+    cols = starts_with("g"),
+    names_to = "gene",
+    values_to = "log2_expr_level"
+  )
+
+# making data nested
+gravier_clean_aug_long_nested <- gravier_clean_aug_long |> 
+  group_by(gene) |> 
+  nest() |> 
+  ungroup()
+
+```
+
+## Fitting models
+
+```{r}
+# Up and down regulated genes, with significance
+
+# We want to work per gene, group_by() gene
+gravier_clean_aug_long_nested <- gravier_clean_aug_long_nested |> 
+  group_by(gene) |> 
+  
+  # add newline, model_object to gravier_clean_aug_long_nested per gene
+  mutate(model_object = map(.x = data,
+                   .f = ~lm(formula = log2_expr_level ~ early_metastasis,
+                            data = .x)))
+
+```
+
+```{r}
+# making model_object_tidy
+
+gravier_clean_aug_long_nested <- gravier_clean_aug_long_nested |>
+  mutate(model_object_tidy = map(model_object, 
+                                 ~tidy(.x, conf.int = TRUE, conf.level = 0.95)),
+         model_object_glance = map(model_object, ~glance(.x))
+         )
+
+```
+
+```{r}
+# use the model_object_tidy to make estimate
+gravier_estimates <- gravier_clean_aug_long_nested |> 
+  unnest(model_object_tidy)
+
+# create dplyr-pipeline
+gravier_estimates <- gravier_estimates |>
+  filter(term == "early_metastasis") |> # Select specific variables
+  ungroup()
+```
+
+### Extracting only the slope term, based on early metastasis and un-grouping
+
+```{r}
+
+gravier_estimates <- gravier_estimates |>
+  filter(term == "early_metastasis") |> # Select specific variables
+  ungroup()
+```
+
+### Making the Q-value, corrected P-values
+
+```{r}
+# 
+gravier_estimates_new <- gravier_estimates |>
+  mutate(
+    q.value = p.adjust(p.value, method = "fdr"),  # Calculate q-value using p.adjust()
+    significant = ifelse(q.value < 0.05, "Yes", "No")  # Create a significant indicator variable
+  )
+
+
+# Setting seed for reproducibility
+set.seed(100)
+
+# creating subset
+random_genes_subset <- gravier_estimates_new |>
+  filter(significant == "Yes") |>
+  sample_n(50, replace = FALSE)  # Set replace to FALSE to avoid duplicates
+
+
+# sort highest to lowest
+random_genes_subset$estimate <- as.numeric(random_genes_subset$estimate)
+
+random_genes_subset <- random_genes_subset |>
+  arrange(desc(estimate))
+
+# random_genes_subset <- random_genes_subset[order(random_genes_subset[, 5]), ]
+```
+
+## Plot 2
+
+### Gene associated with early metastasis
+
+```{r}
+# Reorder the levels of the "gene" factor based on "estimate" in descending order
+random_genes_subset$gene <- factor(random_genes_subset$gene, levels = rev(random_genes_subset$gene))
+
+
+ggplot(random_genes_subset, 
+       aes(x = estimate, xmin = conf.low, xmax = conf.high, y = gene)) +
+  
+  geom_point(size = 3) +
+  geom_errorbarh(height = 0.2) +  # Add horizontal error bars
+  geom_vline(xintercept = 0, linetype = "solid", color = "black") +
+  
+  labs(
+    x = "Estimate (95% Cls)",
+    y = "Genes",
+    subtitle = "Genes Associated with Early Metastasis in Small Node-Negative Breast Carcinoma"
+  )
+```
+
+The plot shows a subset of the genes showing significance according to the p-value. The plot show the genes estimations, as they gradually change from those gene of negative estimate, to those of positive estimate.
+
+The vertical line at **`x = 0`** serves as a reference point. Genes to the left of this line have negative estimates, while genes to the right have positive estimates. This line helps to visually distinguish genes with different directions of association with early metastasis. Notiably, there are no genes from the random_subset which holds a estimation at zero, as observed in the plot, data points make gap before going from negative to positive
