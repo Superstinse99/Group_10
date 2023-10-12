@@ -7,7 +7,7 @@ Author: Christina Christiansen s223094, Chunxu Han s220311, Matilde Uth s195796,
 
 ## Lab_7\_Handin
 
-Recreatable data, uploaded and worked through GitHub
+Recreatable data, uploaded and worked through GitHub.
 
 ### Libraries
 
